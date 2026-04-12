@@ -1,4 +1,4 @@
-## Basys 3 Constraints - NES PPU Phase 1
+## Basys 3 Constraints - NES PPU
 ## Board: Digilent Basys 3 (Artix-7 XC7A35TCPG236-1)
 
 ## Clock signal (100 MHz)
@@ -7,6 +7,11 @@ create_clock -add -name sys_clk_pin -period 10.00 -waveform {0 5} [get_ports clk
 
 ## Reset button (center)
 set_property -dict { PACKAGE_PIN U18  IOSTANDARD LVCMOS33 } [get_ports btnC]
+
+## Switches (test pattern select)
+set_property -dict { PACKAGE_PIN V17  IOSTANDARD LVCMOS33 } [get_ports {sw[0]}]
+set_property -dict { PACKAGE_PIN V16  IOSTANDARD LVCMOS33 } [get_ports {sw[1]}]
+set_property -dict { PACKAGE_PIN W16  IOSTANDARD LVCMOS33 } [get_ports {sw[2]}]
 
 ## VGA Connector
 # Red
