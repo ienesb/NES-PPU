@@ -1,0 +1,260 @@
+# Vivado project files
+*.xpr
+*.cache/
+*.runs/
+*.sim/
+*.ip_user_files/
+*.hw/
+*.srcs/
+*.gen/
+*.str
+*.jou
+*.log
+
+# Entire Vivado project directory
+project_*/
+
+# Vivado backup files
+*.bak
+*.bak[0-9]*
+
+# Synthesis / implementation outputs
+*.bit
+*.bin
+*.mcs
+*.prm
+*.ltx
+
+# Reports and logs
+*.rpt
+*.pb
+*.wdb
+*.vdi
+
+# Timing / checkpoint files
+*.dcp
+
+# IP cores (generated)
+*.xci
+*.xco
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+
+
+*.py[cod]
+
+# C extensions
+*.so
+*.dll
+
+# C objects
+*.o
+
+# Python and C++ code coverage
+.coverage
+.coverage.cocotb
+*.gcno
+*.gcda
+*.gcov
+*.xml
+
+# Packaging
+*.egg
+*.egg-info
+dist
+build
+eggs
+parts
+sdist
+obj
+develop-eggs
+.installed.cfg
+__pycache__
+.tox
+.nox
+.eggs
+
+# Vim tmp files
+*.swp
+*~
+
+# VSCode project files
+.vscode/
+*.code-workspace
+
+# Emacs tmp files
+\#*\#
+\.\#*
+
+# Mergetool tmp files
+*.orig
+*.bak
+
+# Simulation binaries
+*.vvp
+
+# Waveforms
+*.vcd
+*.fst
+*.fst.hier
+
+# Results
+results.xml
+combined_results.xml
+
+# Debuggers
+.gdb_history
+
+# VCS files
+*.tab
+sim_build
+ucli.key
+
+# Pytest
+.pytest_cache
+
+# Cadence Incisive/Xcelium
+*.elog
+irun.log
+xrun.log
+irun.key
+xrun.key
+irun.history
+xrun.history
+INCA_libs
+xcelium.d
+ncelab_*.err
+xmelab_*.err
+ncsim_*.err
+xmsim_*.err
+bpad_*.err
+.bpad/
+.simvision/
+waves.shm/
+
+# Interface libraries built on setup
+src/cocotb/libs
+pip-wheel-metadata/
+
+# Mentor Modelsim/Questa
+tests/test_cases/*/modelsim.ini
+tests/test_cases/*/transcript
+tests/test_cases/*/qwave.db
+tests/test_cases/*/design.bin
+examples/*/tests/modelsim.ini
+examples/*/tests/transcript
+examples/*/tests/qwave.db
+examples/*/tests/design.bin
+*.wlf
+qrun.log
+visualizer.log
+
+# Riviera
+tests/test_cases/*/library.cfg
+tests/test_cases/*/dataset.asdb
+tests/test_cases/*/compile
+examples/*/tests/library.cfg
+examples/*/tests/dataset.asdb
+examples/*/tests/compile
+
+# Tachyon DA CVC
+tests/test_cases/*/verilog.log
+examples/*/tests/verilog.log
+
+# DSim
+dsim*
+metrics.db
+
+# Build artifacts
+/dist/
+
+# clangd
+compile_commands.json
+compile_commands.*.json
+.cache/
+
+
+# Credentials and sensitive data
+.credentials.json
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Temporary and cache files
+.cache/
+*.tmp
+*.temp
+*.log
+*.pid
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Runtime and session data
+sessions/
+backups/
+chrome/
+shell-snapshots/
+todos/
+statsig/
+docs/
+projects/
+ide/
+plans/
+plugins/cache/
+
+# Local development
+local/
+*.local
+.claude/settings.local.json
+
+# Node modules if any
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+history.jsonl
+debug/
+file-history/
+/.statusline_cache
+plugins/
+stats-cache.json
+plugins/installed_plugins.json
+bin/
+tmpclaude-*
+plugins/known_marketplaces.json
+paste-cache/
+tasks/
+teams/
+
+*.lst
+*.out
+*.bck
