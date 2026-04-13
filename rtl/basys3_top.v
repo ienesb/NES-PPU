@@ -1,26 +1,24 @@
 `timescale 1ns / 1ps
 
-// Basys 3 Top-Level Module - Phase 3
-// Framebuffer pipeline: PPU writes test pattern -> BRAM -> VGA scaler -> palette LUT -> display
+// Basys 3 Top-Level Module - Phase 5
+// PPU background rendering: CHR ROM + nametable -> BG pipeline -> framebuffer -> VGA
 
 module basys3_top (
     input  wire       clk_100,    // 100 MHz board oscillator
     input  wire       btnC,       // center button as reset
-    input  wire [2:0] sw,         // switches for test pattern select
-    output wire [3:0] vga_r,      // VGA red (4-bit)
-    output wire [3:0] vga_g,      // VGA green (4-bit)
-    output wire [3:0] vga_b,      // VGA blue (4-bit)
-    output wire       hsync,      // VGA horizontal sync
-    output wire       vsync,      // VGA vertical sync
+    input  wire [3:0] sw,         // sw[0]: pattern table select, sw[1]: show_bg
+    output wire [3:0] vga_r,
+    output wire [3:0] vga_g,
+    output wire [3:0] vga_b,
+    output wire       hsync,
+    output wire       vsync,
     output wire [1:0] led         // LED 0: heartbeat, LED 1: MMCM locked
 );
 
     // =========================================================
-    // Clock generation (MMCM)
+    // Clock generation
     // =========================================================
-    wire clk_vga;
-    wire clk_ppu;
-    wire mmcm_locked;
+    wire clk_vga, clk_ppu, mmcm_locked;
 
     clk_gen u_clk_gen (
         .clk_100 (clk_100),
@@ -31,91 +29,97 @@ module basys3_top (
     );
 
     // =========================================================
-    // Reset synchronizers (wait for MMCM lock)
+    // Reset synchronizers
     // =========================================================
     reg [3:0] rst_vga_shift = 4'hF;
     wire rst_vga;
-
     always @(posedge clk_vga or negedge mmcm_locked) begin
-        if (~mmcm_locked)
-            rst_vga_shift <= 4'hF;
-        else
-            rst_vga_shift <= {rst_vga_shift[2:0], 1'b0};
+        if (~mmcm_locked) rst_vga_shift <= 4'hF;
+        else              rst_vga_shift <= {rst_vga_shift[2:0], 1'b0};
     end
     assign rst_vga = rst_vga_shift[3];
 
     reg [3:0] rst_ppu_shift = 4'hF;
     wire rst_ppu;
-
     always @(posedge clk_ppu or negedge mmcm_locked) begin
-        if (~mmcm_locked)
-            rst_ppu_shift <= 4'hF;
-        else
-            rst_ppu_shift <= {rst_ppu_shift[2:0], 1'b0};
+        if (~mmcm_locked) rst_ppu_shift <= 4'hF;
+        else              rst_ppu_shift <= {rst_ppu_shift[2:0], 1'b0};
     end
     assign rst_ppu = rst_ppu_shift[3];
 
     // =========================================================
-    // PPU-domain test pattern writer
-    // Writes a test pattern into framebuffer at PPU clock rate
-    // Cycles through all 256x240 pixels continuously
+    // PPU configuration (hardcoded for Phase 5)
     // =========================================================
-    reg [7:0]  ppu_x = 0;       // 0-255
-    reg [7:0]  ppu_y = 0;       // 0-239
-    reg [15:0] ppu_addr;
-    reg [5:0]  ppu_color;
-    reg        ppu_we;
-    reg [5:0]  frame_num = 0;   // for animated patterns
+    wire        bg_pattern_base = sw[0]; // switch 0: pattern table 0/1
+    wire        show_bg         = ~sw[1]; // switch 1: hide BG (active low)
+    wire [14:0] t_reg           = 15'd0;  // no scroll
+    wire [2:0]  fine_x          = 3'd0;   // no fine X scroll
 
-    always @(posedge clk_ppu) begin
-        if (rst_ppu) begin
-            ppu_x     <= 0;
-            ppu_y     <= 0;
-            ppu_we    <= 0;
-            frame_num <= 0;
-        end else begin
-            ppu_we   <= 1;
-            ppu_addr <= {ppu_y, ppu_x};
+    // =========================================================
+    // PPU core
+    // =========================================================
+    wire [13:0] ppu_vram_addr;
+    wire [7:0]  ppu_vram_data;
+    wire [15:0] ppu_fb_addr;
+    wire [5:0]  ppu_fb_data;
+    wire        ppu_fb_we;
 
-            // Test pattern selection via switches
-            case (sw)
-                // Pattern 0: horizontal palette stripes (all 64 colors)
-                3'd0: ppu_color <= ppu_y[7:2]; // 4-pixel tall stripes
+    ppu_top u_ppu (
+        .clk             (clk_ppu),
+        .rst             (rst_ppu),
+        .bg_pattern_base (bg_pattern_base),
+        .show_bg         (show_bg),
+        .t_reg           (t_reg),
+        .fine_x          (fine_x),
+        .vram_addr       (ppu_vram_addr),
+        .vram_data       (ppu_vram_data),
+        .fb_addr         (ppu_fb_addr),
+        .fb_data         (ppu_fb_data),
+        .fb_we           (ppu_fb_we),
+        .vblank_flag     (),
+        .dbg_scanline    (),
+        .dbg_cycle       (),
+        .dbg_v           ()
+    );
 
-                // Pattern 1: vertical palette stripes
-                3'd1: ppu_color <= ppu_x[7:2];
+    // =========================================================
+    // VRAM address decoding
+    // =========================================================
+    // PPU address space:
+    //   $0000-$1FFF: CHR ROM (pattern tables)
+    //   $2000-$3EFF: Nametables (2KB VRAM with mirroring)
+    //   $3F00-$3FFF: Palette (handled internally by PPU)
 
-                // Pattern 2: color grid (4x16 blocks)
-                3'd2: ppu_color <= {ppu_y[5:4], ppu_x[7:4]};
+    wire chr_select = ~ppu_vram_addr[13]; // addr < $2000
 
-                // Pattern 3: animated diagonal gradient
-                3'd3: ppu_color <= ppu_x[5:0] + ppu_y[5:0] + frame_num;
+    // CHR ROM (8KB)
+    wire [7:0] chr_data;
+    chr_rom u_chr_rom (
+        .clk  (clk_ppu),
+        .addr (ppu_vram_addr[12:0]),
+        .data (chr_data)
+    );
 
-                // Pattern 4: NES-style test screen with borders
-                3'd4: begin
-                    if (ppu_x < 8 || ppu_x >= 248 || ppu_y < 8 || ppu_y >= 232)
-                        ppu_color <= 6'h16; // orange border
-                    else
-                        ppu_color <= {ppu_y[6:4], ppu_x[6:4]};
-                end
+    // Nametable VRAM (2KB) with vertical mirroring
+    // Vertical mirroring: $2000=$2800, $2400=$2C00
+    // Physical address: {addr[10], addr[9:0]}
+    wire [10:0] nt_phys_addr = {ppu_vram_addr[10], ppu_vram_addr[9:0]};
+    wire [7:0]  nt_data;
 
-                default: ppu_color <= 6'h0D; // black
-            endcase
+    vram u_vram (
+        .clk  (clk_ppu),
+        .we   (1'b0),
+        .addr (nt_phys_addr),
+        .din  (8'd0),
+        .dout (nt_data)
+    );
 
-            // Advance pixel position
-            if (ppu_x == 255) begin
-                ppu_x <= 0;
-                if (ppu_y == 239) begin
-                    ppu_y <= 0;
-                    frame_num <= frame_num + 1;
-                end else begin
-                    ppu_y <= ppu_y + 1;
-                end
-            end else begin
-                ppu_x <= ppu_x + 1;
-            end
-        end
-    end
+    // Data mux: delay select by 1 cycle to match BRAM read latency
+    reg chr_sel_d;
+    always @(posedge clk_ppu)
+        chr_sel_d <= chr_select;
+
+    assign ppu_vram_data = chr_sel_d ? chr_data : nt_data;
 
     // =========================================================
     // Framebuffer (dual-port BRAM)
@@ -125,20 +129,19 @@ module basys3_top (
 
     framebuffer u_framebuffer (
         .clk_a  (clk_ppu),
-        .we_a   (ppu_we),
-        .addr_a (ppu_addr),
-        .din_a  (ppu_color),
+        .we_a   (ppu_fb_we),
+        .addr_a (ppu_fb_addr),
+        .din_a  (ppu_fb_data),
         .clk_b  (clk_vga),
         .addr_b (fb_rd_addr),
         .dout_b (fb_color)
     );
 
     // =========================================================
-    // VGA timing generator
+    // VGA timing
     // =========================================================
     wire       video_active;
-    wire [9:0] pixel_x;
-    wire [9:0] pixel_y;
+    wire [9:0] pixel_x, pixel_y;
 
     vga_timing u_vga_timing (
         .clk          (clk_vga),
@@ -151,11 +154,11 @@ module basys3_top (
     );
 
     // =========================================================
-    // VGA scaler (640x480 -> 256x240 framebuffer address)
+    // VGA scaler (640x480 -> 256x240 NES)
     // =========================================================
     wire in_nes_area;
 
-    vga_scaler u_vga_scaler (
+    vga_scaler u_scaler (
         .pixel_x      (pixel_x),
         .pixel_y      (pixel_y),
         .video_active (video_active),
@@ -164,11 +167,11 @@ module basys3_top (
     );
 
     // =========================================================
-    // NES palette LUT (6-bit index -> 12-bit RGB)
+    // NES palette LUT (6-bit NES color -> 12-bit RGB)
     // =========================================================
     wire [3:0] pal_r, pal_g, pal_b;
 
-    nes_palette_lut u_palette (
+    nes_palette_lut u_pal_lut (
         .color_index (fb_color),
         .r           (pal_r),
         .g           (pal_g),
@@ -176,25 +179,15 @@ module basys3_top (
     );
 
     // =========================================================
-    // VGA output (pipeline: 1 cycle BRAM read + 1 cycle LUT)
-    // Need to delay sync/active signals by 2 clocks to match
+    // VGA output with pipeline delay
     // =========================================================
-    reg       hsync_d1, hsync_d2;
-    reg       vsync_d1, vsync_d2;
-    reg       in_nes_d1, in_nes_d2;
-
+    reg in_nes_d1, in_nes_d2;
     always @(posedge clk_vga) begin
-        hsync_d1  <= hsync;
-        hsync_d2  <= hsync_d1;
-        vsync_d1  <= vsync;
-        vsync_d2  <= vsync_d1;
         in_nes_d1 <= in_nes_area;
         in_nes_d2 <= in_nes_d1;
     end
 
-    // Register palette output and blank outside NES area
     reg [3:0] r_out, g_out, b_out;
-
     always @(posedge clk_vga) begin
         if (in_nes_d2) begin
             r_out <= pal_r;
@@ -210,15 +203,6 @@ module basys3_top (
     assign vga_r = r_out;
     assign vga_g = g_out;
     assign vga_b = b_out;
-
-    // Use delayed sync signals to match pixel pipeline
-    // hsync/vsync come from vga_timing which is already registered,
-    // but we added 2 pipeline stages for BRAM + LUT, so delay syncs too
-    // Actually, hsync/vsync just need to maintain their timing relationship
-    // with the pixel data. Since we delayed pixel data by ~2-3 cycles,
-    // delay syncs to match.
-    // Note: For VGA, small sync-to-data alignment shifts (a few pixels)
-    // are tolerated by monitors. We use direct sync for simplicity.
 
     // =========================================================
     // Heartbeat LED
