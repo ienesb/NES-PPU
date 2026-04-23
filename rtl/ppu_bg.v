@@ -30,8 +30,8 @@ module ppu_bg (
     input  wire        rendering_en,
     input  wire        bg_pattern_base,  // 0=$0000, 1=$1000
 
-    // Scroll registers (from external / CPU registers)
-    input  wire [14:0] t_reg,
+    // Scroll registers (owned by ppu_registers)
+    input  wire [14:0] v,
     input  wire [2:0]  fine_x,
 
     // VRAM interface
@@ -41,21 +41,12 @@ module ppu_bg (
     // Pixel output
     output wire [3:0]  bg_pixel,   // {attr[1:0], pattern[1:0]}
 
-    // V register output (for debug / future use)
-    output wire [14:0] v_out
+    // Scroll tick pulses (to ppu_registers for v management)
+    output wire        inc_x_tick,
+    output wire        inc_y_tick,
+    output wire        h_copy_tick,
+    output wire        v_copy_tick
 );
-
-    // =================================================================
-    // V register (current VRAM address / scroll position)
-    //
-    // Bit layout: yyy NN YYYYY XXXXX
-    //   [14:12] = fine Y scroll (0-7)
-    //   [11:10] = nametable select
-    //   [9:5]   = coarse Y scroll (0-29)
-    //   [4:0]   = coarse X scroll (0-31)
-    // =================================================================
-    reg [14:0] v;
-    assign v_out = v;
 
     // =================================================================
     // Fetch timing
@@ -193,55 +184,12 @@ module ppu_bg (
                       : 4'd0;
 
     // =================================================================
-    // V register management
+    // Scroll tick outputs (ppu_registers owns v)
     // =================================================================
-
-    always @(posedge clk) begin
-        if (rst) begin
-            v <= 15'd0;
-        end else if (rendering_en && render_line) begin
-
-            // --- Coarse X increment (at end of each tile fetch) ---
-            if (load_sr) begin
-                if (v[4:0] == 5'd31) begin
-                    v[4:0] <= 5'd0;
-                    v[10]  <= ~v[10]; // toggle horizontal nametable
-                end else begin
-                    v[4:0] <= v[4:0] + 5'd1;
-                end
-            end
-
-            // --- Fine Y / Coarse Y increment (at cycle 256) ---
-            if (cycle == 9'd256) begin
-                if (v[14:12] != 3'd7) begin
-                    v[14:12] <= v[14:12] + 3'd1;
-                end else begin
-                    v[14:12] <= 3'd0;
-                    if (v[9:5] == 5'd29) begin
-                        v[9:5] <= 5'd0;
-                        v[11]  <= ~v[11]; // toggle vertical nametable
-                    end else if (v[9:5] == 5'd31) begin
-                        v[9:5] <= 5'd0;   // wrap without toggle (quirk)
-                    end else begin
-                        v[9:5] <= v[9:5] + 5'd1;
-                    end
-                end
-            end
-
-            // --- Horizontal copy from t (at cycle 257) ---
-            // Overwrites coarse X and horizontal nametable bit
-            if (cycle == 9'd257) begin
-                v[4:0] <= t_reg[4:0];
-                v[10]  <= t_reg[10];
-            end
-
-            // --- Vertical copy from t (pre-render line, cycles 280-304) ---
-            if (pre_render_line && cycle >= 9'd280 && cycle <= 9'd304) begin
-                v[14:12] <= t_reg[14:12];
-                v[9:5]   <= t_reg[9:5];
-                v[11]    <= t_reg[11];
-            end
-        end
-    end
+    assign inc_x_tick  = rendering_en && render_line && load_sr;
+    assign inc_y_tick  = rendering_en && render_line && (cycle == 9'd256);
+    assign h_copy_tick = rendering_en && render_line && (cycle == 9'd257);
+    assign v_copy_tick = rendering_en && pre_render_line &&
+                         (cycle >= 9'd280) && (cycle <= 9'd304);
 
 endmodule

@@ -23,72 +23,67 @@ module tb_ppu_sprites;
     // ~5.369 MHz PPU clock
     always #93 clk = ~clk;
 
-    // PPU configuration
-    wire        bg_pattern_base     = 0;
-    wire        sprite_pattern_base = 0;
-    wire        sprite_size         = 0;
-    wire        show_bg             = 1;
-    wire        show_sprite         = 1;
-    wire [14:0] t_reg               = 15'd0;
-    wire [2:0]  fine_x              = 3'd0;
+    // CPU bus for register programming
+    reg  [2:0] cpu_addr = 0;
+    reg  [7:0] cpu_din  = 0;
+    reg        cpu_we   = 0;
 
-    // OAM interface
-    wire [7:0] oam_addr;
+    // OAM interface (shared between CPU write and sprite eval)
+    wire [7:0] oam_bus_addr;
+    wire [7:0] oam_din_ppu;
+    wire       oam_we_ppu;
     wire [7:0] oam_data;
 
     // VRAM bus
     wire [13:0] ppu_vram_addr;
     wire [7:0]  ppu_vram_data;
+    wire [7:0]  ppu_vram_din;
+    wire        ppu_vram_we;
 
-    // Framebuffer write
     wire [15:0] fb_addr;
     wire [5:0]  fb_data;
     wire        fb_we;
 
-    // Status
     wire        vblank_flag;
     wire [8:0]  dbg_scanline, dbg_cycle;
     wire [14:0] dbg_v;
 
-    // =========================================================
-    // Primary OAM
-    // =========================================================
     ppu_oam u_oam (
         .clk       (clk),
-        .cpu_addr  (8'd0),
-        .cpu_din   (8'd0),
-        .cpu_we    (1'b0),
+        .cpu_addr  (oam_bus_addr),
+        .cpu_din   (oam_din_ppu),
+        .cpu_we    (oam_we_ppu),
         .cpu_dout  (),
-        .eval_addr (oam_addr),
+        .eval_addr (oam_bus_addr),
         .eval_dout (oam_data)
     );
 
-    // =========================================================
-    // PPU core
-    // =========================================================
     ppu_top u_ppu (
-        .clk                (clk),
-        .rst                (rst),
-        .bg_pattern_base    (bg_pattern_base),
-        .sprite_pattern_base(sprite_pattern_base),
-        .sprite_size        (sprite_size),
-        .show_bg            (show_bg),
-        .show_sprite        (show_sprite),
-        .t_reg              (t_reg),
-        .fine_x             (fine_x),
-        .vram_addr          (ppu_vram_addr),
-        .vram_data          (ppu_vram_data),
-        .oam_addr           (oam_addr),
-        .oam_data           (oam_data),
-        .fb_addr            (fb_addr),
-        .fb_data            (fb_data),
-        .fb_we              (fb_we),
-        .vblank_flag        (vblank_flag),
-        .sprite0_hit        (),
-        .sprite_overflow    (),
-        .dbg_scanline       (dbg_scanline),
-        .dbg_cycle          (dbg_cycle),
-        .dbg_v              (dbg_v)
+        .clk          (clk),
+        .rst          (rst),
+        .cpu_addr     (cpu_addr),
+        .cpu_din      (cpu_din),
+        .cpu_dout     (),
+        .cpu_re       (1'b0),
+        .cpu_we       (cpu_we),
+        .nmi_n        (),
+        .vram_addr    (ppu_vram_addr),
+        .vram_din     (ppu_vram_din),
+        .vram_dout    (ppu_vram_data),
+        .vram_we      (ppu_vram_we),
+        .oam_addr     (oam_bus_addr),
+        .oam_dout_ext (oam_data),
+        .oam_din_ext  (oam_din_ppu),
+        .oam_we_ext   (oam_we_ppu),
+        .fb_addr      (fb_addr),
+        .fb_data      (fb_data),
+        .fb_we        (fb_we),
+        .vblank_flag  (vblank_flag),
+        .sprite0_hit  (),
+        .sprite_overflow (),
+        .dbg_scanline (dbg_scanline),
+        .dbg_cycle    (dbg_cycle),
+        .dbg_v        (dbg_v)
     );
 
     // =========================================================
@@ -104,19 +99,19 @@ module tb_ppu_sprites;
     // =========================================================
     // Nametable VRAM (vertical mirroring)
     // =========================================================
+    wire chr_select = ~ppu_vram_addr[13];
     wire [10:0] nt_phys_addr = {ppu_vram_addr[10], ppu_vram_addr[9:0]};
     wire [7:0]  nt_data;
 
     vram u_vram (
         .clk  (clk),
-        .we   (1'b0),
+        .we   (ppu_vram_we & ~chr_select),
         .addr (nt_phys_addr),
-        .din  (8'd0),
+        .din  (ppu_vram_din),
         .dout (nt_data)
     );
 
     // Data mux with 1-cycle delay for BRAM read latency
-    wire chr_select = ~ppu_vram_addr[13];
     reg  chr_sel_d;
     always @(posedge clk) chr_sel_d <= chr_select;
     assign ppu_vram_data = chr_sel_d ? chr_data : nt_data;
@@ -152,6 +147,11 @@ module tb_ppu_sprites;
         // Release reset
         repeat (5) @(posedge clk);
         rst = 0;
+        repeat (5) @(posedge clk);
+
+        // Program PPUMASK ($2001) = 0x18 -> show_bg + show_sprite
+        @(negedge clk); cpu_addr = 3'h1; cpu_din = 8'h18; cpu_we = 1;
+        @(negedge clk); cpu_we = 0;
 
         // Wait for vblank (end of first rendered frame)
         $display("Waiting for first frame...");

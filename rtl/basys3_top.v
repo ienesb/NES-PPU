@@ -52,29 +52,59 @@ module basys3_top (
     assign rst_ppu = rst_ppu_shift[3];
 
     // =========================================================
-    // PPU configuration
+    // Fake CPU: writes PPUCTRL/PPUMASK each vblank from switches.
+    // Phase 7 hardware path for now; full 6502 is Phase 9.
     // =========================================================
-    wire bg_pattern_base     = sw[0];
-    wire show_bg             = ~sw[1];
-    wire show_sprite         = ~sw[2];
-    wire sprite_pattern_base = sw[3];
-    wire sprite_size         = 1'b0;   // 8x8 mode on hardware until Phase 7 register interface
-    wire [14:0] t_reg        = 15'd0;
-    wire [2:0]  fine_x       = 3'd0;
+    wire [7:0] ppuctrl_val = {3'b000, sw[3], sw[0], 3'b000};
+    //                        V P H   S(3)   B(4)   I NN
+    wire [7:0] ppumask_val = {3'b000, ~sw[2], ~sw[1], 3'b000};
+    //                                showS   showBG
+
+    wire vblank_flag_ppu;
+
+    reg       cpu_we_r;
+    reg [2:0] cpu_addr_r;
+    reg [7:0] cpu_din_r;
+    reg [1:0] wr_phase;
+    reg       vblank_d;
+    wire      vblank_rise = vblank_flag_ppu & ~vblank_d;
+
+    always @(posedge clk_ppu) begin
+        if (rst_ppu) begin
+            cpu_we_r <= 0;
+            wr_phase <= 0;
+            vblank_d <= 0;
+        end else begin
+            vblank_d <= vblank_flag_ppu;
+            cpu_we_r <= 0;
+            if (vblank_rise)
+                wr_phase <= 2'd1;
+            else if (wr_phase != 2'd0) begin
+                cpu_we_r <= 1;
+                case (wr_phase)
+                    2'd1: begin cpu_addr_r <= 3'h0; cpu_din_r <= ppuctrl_val; end
+                    2'd2: begin cpu_addr_r <= 3'h1; cpu_din_r <= ppumask_val; end
+                endcase
+                wr_phase <= (wr_phase == 2'd2) ? 2'd0 : wr_phase + 2'd1;
+            end
+        end
+    end
 
     // =========================================================
-    // Primary OAM
+    // Primary OAM (shared between CPU writes and sprite eval)
     // =========================================================
-    wire [7:0] oam_addr;
+    wire [7:0] oam_bus_addr;
+    wire [7:0] oam_din_ppu;
+    wire       oam_we_ppu;
     wire [7:0] oam_data;
 
     ppu_oam u_oam (
         .clk       (clk_ppu),
-        .cpu_addr  (8'd0),
-        .cpu_din   (8'd0),
-        .cpu_we    (1'b0),
+        .cpu_addr  (oam_bus_addr),
+        .cpu_din   (oam_din_ppu),
+        .cpu_we    (oam_we_ppu),
         .cpu_dout  (),
-        .eval_addr (oam_addr),
+        .eval_addr (oam_bus_addr),
         .eval_dout (oam_data)
     );
 
@@ -83,33 +113,39 @@ module basys3_top (
     // =========================================================
     wire [13:0] ppu_vram_addr;
     wire [7:0]  ppu_vram_data;
+    wire        ppu_vram_we;
+    wire [7:0]  ppu_vram_din;
     wire [15:0] ppu_fb_addr;
     wire [5:0]  ppu_fb_data;
     wire        ppu_fb_we;
+    wire        ppu_nmi_n;
 
     ppu_top u_ppu (
-        .clk                (clk_ppu),
-        .rst                (rst_ppu),
-        .bg_pattern_base    (bg_pattern_base),
-        .sprite_pattern_base(sprite_pattern_base),
-        .sprite_size        (sprite_size),
-        .show_bg            (show_bg),
-        .show_sprite        (show_sprite),
-        .t_reg              (t_reg),
-        .fine_x             (fine_x),
-        .vram_addr          (ppu_vram_addr),
-        .vram_data          (ppu_vram_data),
-        .oam_addr           (oam_addr),
-        .oam_data           (oam_data),
-        .fb_addr            (ppu_fb_addr),
-        .fb_data            (ppu_fb_data),
-        .fb_we              (ppu_fb_we),
-        .vblank_flag        (),
-        .sprite0_hit        (),
-        .sprite_overflow    (),
-        .dbg_scanline       (),
-        .dbg_cycle          (),
-        .dbg_v              ()
+        .clk          (clk_ppu),
+        .rst          (rst_ppu),
+        .cpu_addr     (cpu_addr_r),
+        .cpu_din      (cpu_din_r),
+        .cpu_dout     (),
+        .cpu_re       (1'b0),
+        .cpu_we       (cpu_we_r),
+        .nmi_n        (ppu_nmi_n),
+        .vram_addr    (ppu_vram_addr),
+        .vram_din     (ppu_vram_din),
+        .vram_dout    (ppu_vram_data),
+        .vram_we      (ppu_vram_we),
+        .oam_addr     (oam_bus_addr),
+        .oam_dout_ext (oam_data),
+        .oam_din_ext  (oam_din_ppu),
+        .oam_we_ext   (oam_we_ppu),
+        .fb_addr      (ppu_fb_addr),
+        .fb_data      (ppu_fb_data),
+        .fb_we        (ppu_fb_we),
+        .vblank_flag  (vblank_flag_ppu),
+        .sprite0_hit  (),
+        .sprite_overflow (),
+        .dbg_scanline (),
+        .dbg_cycle    (),
+        .dbg_v        ()
     );
 
     // =========================================================
@@ -129,9 +165,9 @@ module basys3_top (
 
     vram u_vram (
         .clk  (clk_ppu),
-        .we   (1'b0),
+        .we   (ppu_vram_we & ~chr_select),
         .addr (nt_phys_addr),
-        .din  (8'd0),
+        .din  (ppu_vram_din),
         .dout (nt_data)
     );
 

@@ -1,35 +1,39 @@
 `timescale 1ns / 1ps
 
-// PPU Top-Level Module - Phase 6
-// Integrates: timing engine, BG renderer, sprite eval/render, palette, output mux
+// PPU Top-Level Module - Phase 7
+// Integrates: timing engine, register file, BG renderer, sprite eval/render,
+//             palette, output mux. Exposes CPU bus at $2000-$2007.
 
 module ppu_top (
     input  wire        clk,
     input  wire        rst,
 
-    // Configuration (will come from CPU registers in Phase 7)
-    input  wire        bg_pattern_base,     // PPUCTRL bit 4: 0=$0000, 1=$1000
-    input  wire        sprite_pattern_base, // PPUCTRL bit 3 (8x8 mode)
-    input  wire        sprite_size,         // PPUCTRL bit 5: 0=8x8, 1=8x16
-    input  wire        show_bg,             // PPUMASK bit 3
-    input  wire        show_sprite,         // PPUMASK bit 4
-    input  wire [14:0] t_reg,               // scroll target register
-    input  wire [2:0]  fine_x,              // fine X scroll
+    // CPU bus ($2000-$2007, low 3 bits)
+    input  wire [2:0]  cpu_addr,
+    input  wire [7:0]  cpu_din,
+    output wire [7:0]  cpu_dout,
+    input  wire        cpu_re,
+    input  wire        cpu_we,
+    output wire        nmi_n,
 
-    // VRAM interface (shared bus, muxed between BG and sprite)
+    // VRAM bus (shared: BG, sprite, and CPU $2007 access)
     output wire [13:0] vram_addr,
-    input  wire [7:0]  vram_data,
+    output wire [7:0]  vram_din,
+    input  wire [7:0]  vram_dout,
+    output wire        vram_we,
 
-    // Primary OAM read (from ppu_oam, async)
-    output wire [7:0]  oam_addr,
-    input  wire [7:0]  oam_data,
+    // OAM bus (ppu_oam lives outside; CPU and sprite-eval access it)
+    output wire [7:0]  oam_addr,       // to ppu_oam.eval_addr during render, .cpu_addr otherwise
+    input  wire [7:0]  oam_dout_ext,
+    output wire [7:0]  oam_din_ext,
+    output wire        oam_we_ext,
 
     // Framebuffer write interface
     output reg  [15:0] fb_addr,
     output reg  [5:0]  fb_data,
     output reg         fb_we,
 
-    // Status
+    // Status / debug
     output wire        vblank_flag,
     output wire        sprite0_hit,
     output wire        sprite_overflow,
@@ -47,7 +51,10 @@ module ppu_top (
     wire vblank_set, vblank_clr, frame_end;
     wire odd_frame;
 
-    wire rendering_en = show_bg || show_sprite;
+    // Register-driven config (declared here, sourced below)
+    wire ctrl_bg_pat_base, ctrl_sprite_pat_base, ctrl_sprite_size;
+    wire mask_show_bg, mask_show_sprite;
+    wire rendering_en = mask_show_bg | mask_show_sprite;
 
     ppu_timing u_timing (
         .clk            (clk),
@@ -70,25 +77,81 @@ module ppu_top (
     );
 
     // =================================================================
-    // Vblank flag
+    // Register file
     // =================================================================
-    reg vblank_reg;
-    assign vblank_flag = vblank_reg;
+    wire [14:0] v_reg, t_reg;
+    wire [2:0]  fine_x;
+    wire        inc_x_tick, inc_y_tick, h_copy_tick, v_copy_tick;
 
+    wire [7:0]  reg_oam_addr;
+    wire [7:0]  reg_oam_din;
+    wire        reg_oam_we;
+
+    wire [13:0] reg_bus_addr;
+    wire [7:0]  reg_bus_din;
+    wire        reg_bus_we;
+
+    wire        pal_we_reg;
+    wire [4:0]  pal_addr_reg;
+    wire [5:0]  pal_din_reg;
+    wire [5:0]  pal_dout_read;
+
+    ppu_registers u_regs (
+        .clk                (clk),
+        .rst                (rst),
+        .cpu_addr           (cpu_addr),
+        .cpu_din            (cpu_din),
+        .cpu_dout           (cpu_dout),
+        .cpu_re             (cpu_re),
+        .cpu_we             (cpu_we),
+        .inc_x_tick         (inc_x_tick),
+        .inc_y_tick         (inc_y_tick),
+        .h_copy_tick        (h_copy_tick),
+        .v_copy_tick        (v_copy_tick),
+        .vblank_set         (vblank_set),
+        .vblank_clr_pulse   (vblank_clr),
+        .sprite0_hit_in     (sprite0_hit),
+        .sprite_overflow_in (sprite_overflow),
+        .ctrl_nmi_enable    (),
+        .ctrl_sprite_size   (ctrl_sprite_size),
+        .ctrl_sprite_pat_base(ctrl_sprite_pat_base),
+        .ctrl_bg_pat_base   (ctrl_bg_pat_base),
+        .ctrl_vram_inc32    (),
+        .mask_show_bg       (mask_show_bg),
+        .mask_show_sprite   (mask_show_sprite),
+        .mask_show_bg_left  (),
+        .mask_show_sprite_left(),
+        .v_reg              (v_reg),
+        .t_reg              (t_reg),
+        .fine_x             (fine_x),
+        .nmi_n              (nmi_n),
+        .oam_addr           (reg_oam_addr),
+        .oam_din            (reg_oam_din),
+        .oam_we             (reg_oam_we),
+        .oam_dout           (oam_dout_ext),
+        .ppu_bus_addr       (reg_bus_addr),
+        .ppu_bus_din        (reg_bus_din),
+        .ppu_bus_dout       (vram_dout),
+        .ppu_bus_we         (reg_bus_we),
+        .pal_we             (pal_we_reg),
+        .pal_addr           (pal_addr_reg),
+        .pal_din            (pal_din_reg),
+        .pal_dout           (pal_dout_read)
+    );
+
+    // Vblank flag exposed for legacy consumers (mirror of register bit)
+    reg vblank_flag_r;
+    assign vblank_flag = vblank_flag_r;
     always @(posedge clk) begin
-        if (rst)
-            vblank_reg <= 0;
-        else if (vblank_set)
-            vblank_reg <= 1;
-        else if (vblank_clr)
-            vblank_reg <= 0;
+        if (rst)                   vblank_flag_r <= 1'b0;
+        else if (vblank_set)       vblank_flag_r <= 1'b1;
+        else if (vblank_clr)       vblank_flag_r <= 1'b0;
     end
 
     // =================================================================
     // Background renderer
     // =================================================================
     wire [3:0]  bg_pixel;
-    wire [14:0] v_out;
     wire [13:0] bg_vram_addr;
 
     ppu_bg u_bg (
@@ -99,14 +162,17 @@ module ppu_top (
         .visible_line    (visible_line),
         .pre_render_line (pre_render_line),
         .render_line     (render_line),
-        .rendering_en    (show_bg),
-        .bg_pattern_base (bg_pattern_base),
-        .t_reg           (t_reg),
+        .rendering_en    (rendering_en),
+        .bg_pattern_base (ctrl_bg_pat_base),
+        .v               (v_reg),
         .fine_x          (fine_x),
         .vram_addr       (bg_vram_addr),
-        .vram_data       (vram_data),
+        .vram_data       (vram_dout),
         .bg_pixel        (bg_pixel),
-        .v_out           (v_out)
+        .inc_x_tick      (inc_x_tick),
+        .inc_y_tick      (inc_y_tick),
+        .h_copy_tick     (h_copy_tick),
+        .v_copy_tick     (v_copy_tick)
     );
 
     // =================================================================
@@ -116,6 +182,7 @@ module ppu_top (
     wire        sprite_priority_raw;
     wire        sprite_active_raw;
     wire        sprite0_active_raw;
+    wire [7:0]  sp_oam_addr;
     wire [13:0] sp_vram_addr;
     wire        sp_vram_fetch_active;
 
@@ -125,13 +192,13 @@ module ppu_top (
         .cycle              (cycle),
         .scanline           (scanline),
         .rendering_en       (rendering_en),
-        .sprite_size        (sprite_size),
-        .sprite_pattern_base(sprite_pattern_base),
-        .oam_addr           (oam_addr),
-        .oam_data           (oam_data),
+        .sprite_size        (ctrl_sprite_size),
+        .sprite_pattern_base(ctrl_sprite_pat_base),
+        .oam_addr           (sp_oam_addr),
+        .oam_data           (oam_dout_ext),
         .vram_addr          (sp_vram_addr),
         .vram_fetch_active  (sp_vram_fetch_active),
-        .vram_data          (vram_data),
+        .vram_data          (vram_dout),
         .sprite_pixel       (sprite_pixel_raw),
         .sprite_priority    (sprite_priority_raw),
         .sprite_active      (sprite_active_raw),
@@ -139,8 +206,19 @@ module ppu_top (
         .sprite_overflow    (sprite_overflow)
     );
 
-    // VRAM bus: sprite owns during cycles 257-320, BG owns otherwise
-    assign vram_addr = sp_vram_fetch_active ? sp_vram_addr : bg_vram_addr;
+    // VRAM bus arbitration: during render line the PPU pipeline owns the
+    // bus. In vblank/idle the CPU register file drives $2007 traffic.
+    wire ppu_bus_active = render_line;
+    assign vram_addr = ppu_bus_active ? (sp_vram_fetch_active ? sp_vram_addr
+                                                              : bg_vram_addr)
+                                      : reg_bus_addr;
+    assign vram_din  = reg_bus_din;
+    assign vram_we   = ~ppu_bus_active & reg_bus_we;
+
+    // OAM bus: sprite eval drives during render, CPU register file otherwise
+    assign oam_addr    = ppu_bus_active ? sp_oam_addr : reg_oam_addr;
+    assign oam_din_ext = reg_oam_din;
+    assign oam_we_ext  = ~ppu_bus_active & reg_oam_we;
 
     // =================================================================
     // Output multiplexer: BG vs sprite priority
@@ -154,30 +232,29 @@ module ppu_top (
         .sprite_active  (sprite_active_raw),
         .sprite_priority(sprite_priority_raw),
         .sprite0_active (sprite0_active_raw),
-        .show_bg        (show_bg),
-        .show_sprite    (show_sprite),
+        .show_bg        (mask_show_bg),
+        .show_sprite    (mask_show_sprite),
         .final_pixel    (final_pixel),
         .final_is_sprite(final_is_sprite),
         .sprite0_hit    (sprite0_hit)
     );
 
     // =================================================================
-    // Palette lookup
+    // Palette lookup (render read-port + CPU write-port share module)
     // =================================================================
-    // Address: {is_sprite, palette_num[1:0], pattern[1:0]}
-    // Transparent pixels (pattern==00) -> universal BG ($3F00 = addr 0)
     wire [4:0] palette_addr = (final_pixel[1:0] == 2'b00)
                               ? 5'd0
                               : {final_is_sprite, final_pixel};
-
     wire [5:0] palette_color;
 
     ppu_palette u_palette (
-        .clk  (clk),
-        .we   (1'b0),
-        .addr (palette_addr),
-        .din  (6'd0),
-        .dout (palette_color)
+        .clk      (clk),
+        .addr     (palette_addr),
+        .dout     (palette_color),
+        .cpu_we   (pal_we_reg),
+        .cpu_addr (pal_addr_reg),
+        .cpu_din  (pal_din_reg),
+        .cpu_dout (pal_dout_read)
     );
 
     // =================================================================
@@ -190,7 +267,7 @@ module ppu_top (
             fb_data <= 0;
         end else if (visible_pixel) begin
             fb_we   <= 1;
-            fb_addr <= {scanline[7:0], cycle[7:0] - 8'd1}; // y*256 + (cycle-1)
+            fb_addr <= {scanline[7:0], cycle[7:0] - 8'd1};
             fb_data <= palette_color;
         end else begin
             fb_we <= 0;
@@ -198,10 +275,10 @@ module ppu_top (
     end
 
     // =================================================================
-    // Debug outputs
+    // Debug
     // =================================================================
     assign dbg_scanline = scanline;
     assign dbg_cycle    = cycle;
-    assign dbg_v        = v_out;
+    assign dbg_v        = v_reg;
 
 endmodule

@@ -18,26 +18,31 @@
 
 module ppu_palette (
     input  wire        clk,
-    input  wire        we,
+    // Render read port (combinational)
     input  wire [4:0]  addr,
-    input  wire [5:0]  din,
-    output wire [5:0]  dout
+    output wire [5:0]  dout,
+    // CPU port (sync write, async read)
+    input  wire        cpu_we,
+    input  wire [4:0]  cpu_addr,
+    input  wire [5:0]  cpu_din,
+    output wire [5:0]  cpu_dout
 );
 
     reg [5:0] palette [0:31];
 
     // Mirroring: addresses $10/$14/$18/$1C mirror $00/$04/$08/$0C
-    wire [4:0] eff_addr = (addr[4] && addr[1:0] == 2'b00)
-                          ? {1'b0, addr[3:0]}
-                          : addr;
+    function [4:0] eff_fn (input [4:0] a);
+        eff_fn = (a[4] && a[1:0] == 2'b00) ? {1'b0, a[3:0]} : a;
+    endfunction
+    wire [4:0] eff_addr     = eff_fn(addr);
+    wire [4:0] eff_cpu_addr = eff_fn(cpu_addr);
 
-    // Combinational read
-    assign dout = palette[eff_addr];
+    assign dout     = palette[eff_addr];
+    assign cpu_dout = palette[eff_cpu_addr];
 
-    // Synchronous write
     always @(posedge clk) begin
-        if (we)
-            palette[eff_addr] <= din;
+        if (cpu_we)
+            palette[eff_cpu_addr] <= cpu_din;
     end
 
     // Test palette initialization
