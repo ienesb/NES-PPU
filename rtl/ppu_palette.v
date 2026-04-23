@@ -68,23 +68,29 @@ module ppu_palette (
         palette[14] = 6'h2A; // light green
         palette[15] = 6'h26; // light red
 
-        // Sprite palettes (not used yet)
-        palette[16] = 6'h0F;
-        palette[17] = 6'h20;
-        palette[18] = 6'h10;
-        palette[19] = 6'h00;
-        palette[20] = 6'h0F;
-        palette[21] = 6'h20;
-        palette[22] = 6'h10;
-        palette[23] = 6'h00;
-        palette[24] = 6'h0F;
-        palette[25] = 6'h20;
-        palette[26] = 6'h10;
-        palette[27] = 6'h00;
-        palette[28] = 6'h0F;
-        palette[29] = 6'h20;
-        palette[30] = 6'h10;
-        palette[31] = 6'h00;
+        // Sprite palette 0: red, orange, yellow
+        palette[16] = 6'h0F; // bg (mirrors $3F00)
+        palette[17] = 6'h16; // red
+        palette[18] = 6'h27; // orange
+        palette[19] = 6'h37; // light yellow
+
+        // Sprite palette 1: cyan, dark green, purple
+        palette[20] = 6'h0F; // bg (mirrors $3F04)
+        palette[21] = 6'h2C; // cyan
+        palette[22] = 6'h0C; // dark green
+        palette[23] = 6'h14; // purple
+
+        // Sprite palette 2: bright white, green, yellow
+        palette[24] = 6'h0F; // bg (mirrors $3F08)
+        palette[25] = 6'h30; // bright white
+        palette[26] = 6'h1A; // green
+        palette[27] = 6'h28; // yellow
+
+        // Sprite palette 3: orange, dark blue, medium blue
+        palette[28] = 6'h0F; // bg (mirrors $3F0C)
+        palette[29] = 6'h27; // orange
+        palette[30] = 6'h12; // dark blue
+        palette[31] = 6'h21; // medium blue
     end
 
 endmodule

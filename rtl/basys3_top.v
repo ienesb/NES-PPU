@@ -1,18 +1,22 @@
 `timescale 1ns / 1ps
 
-// Basys 3 Top-Level Module - Phase 5
-// PPU background rendering: CHR ROM + nametable -> BG pipeline -> framebuffer -> VGA
+// Basys 3 Top-Level Module - Phase 6
+// PPU background + sprite rendering -> framebuffer -> VGA
+// SW[0]: BG pattern table select (0=$0000, 1=$1000)
+// SW[1]: hide background (active high = hide)
+// SW[2]: hide sprites   (active high = hide)
+// SW[3]: sprite pattern table select (0=$0000, 1=$1000)
 
 module basys3_top (
-    input  wire       clk_100,    // 100 MHz board oscillator
-    input  wire       btnC,       // center button as reset
-    input  wire [3:0] sw,         // sw[0]: pattern table select, sw[1]: show_bg
+    input  wire       clk_100,
+    input  wire       btnC,
+    input  wire [3:0] sw,
     output wire [3:0] vga_r,
     output wire [3:0] vga_g,
     output wire [3:0] vga_b,
     output wire       hsync,
     output wire       vsync,
-    output wire [1:0] led         // LED 0: heartbeat, LED 1: MMCM locked
+    output wire [1:0] led
 );
 
     // =========================================================
@@ -48,12 +52,31 @@ module basys3_top (
     assign rst_ppu = rst_ppu_shift[3];
 
     // =========================================================
-    // PPU configuration (hardcoded for Phase 5)
+    // PPU configuration
     // =========================================================
-    wire        bg_pattern_base = sw[0]; // switch 0: pattern table 0/1
-    wire        show_bg         = ~sw[1]; // switch 1: hide BG (active low)
-    wire [14:0] t_reg           = 15'd0;  // no scroll
-    wire [2:0]  fine_x          = 3'd0;   // no fine X scroll
+    wire bg_pattern_base     = sw[0];
+    wire show_bg             = ~sw[1];
+    wire show_sprite         = ~sw[2];
+    wire sprite_pattern_base = sw[3];
+    wire sprite_size         = 1'b0;   // 8x8 mode on hardware until Phase 7 register interface
+    wire [14:0] t_reg        = 15'd0;
+    wire [2:0]  fine_x       = 3'd0;
+
+    // =========================================================
+    // Primary OAM
+    // =========================================================
+    wire [7:0] oam_addr;
+    wire [7:0] oam_data;
+
+    ppu_oam u_oam (
+        .clk       (clk_ppu),
+        .cpu_addr  (8'd0),
+        .cpu_din   (8'd0),
+        .cpu_we    (1'b0),
+        .cpu_dout  (),
+        .eval_addr (oam_addr),
+        .eval_dout (oam_data)
+    );
 
     // =========================================================
     // PPU core
@@ -65,34 +88,35 @@ module basys3_top (
     wire        ppu_fb_we;
 
     ppu_top u_ppu (
-        .clk             (clk_ppu),
-        .rst             (rst_ppu),
-        .bg_pattern_base (bg_pattern_base),
-        .show_bg         (show_bg),
-        .t_reg           (t_reg),
-        .fine_x          (fine_x),
-        .vram_addr       (ppu_vram_addr),
-        .vram_data       (ppu_vram_data),
-        .fb_addr         (ppu_fb_addr),
-        .fb_data         (ppu_fb_data),
-        .fb_we           (ppu_fb_we),
-        .vblank_flag     (),
-        .dbg_scanline    (),
-        .dbg_cycle       (),
-        .dbg_v           ()
+        .clk                (clk_ppu),
+        .rst                (rst_ppu),
+        .bg_pattern_base    (bg_pattern_base),
+        .sprite_pattern_base(sprite_pattern_base),
+        .sprite_size        (sprite_size),
+        .show_bg            (show_bg),
+        .show_sprite        (show_sprite),
+        .t_reg              (t_reg),
+        .fine_x             (fine_x),
+        .vram_addr          (ppu_vram_addr),
+        .vram_data          (ppu_vram_data),
+        .oam_addr           (oam_addr),
+        .oam_data           (oam_data),
+        .fb_addr            (ppu_fb_addr),
+        .fb_data            (ppu_fb_data),
+        .fb_we              (ppu_fb_we),
+        .vblank_flag        (),
+        .sprite0_hit        (),
+        .sprite_overflow    (),
+        .dbg_scanline       (),
+        .dbg_cycle          (),
+        .dbg_v              ()
     );
 
     // =========================================================
     // VRAM address decoding
     // =========================================================
-    // PPU address space:
-    //   $0000-$1FFF: CHR ROM (pattern tables)
-    //   $2000-$3EFF: Nametables (2KB VRAM with mirroring)
-    //   $3F00-$3FFF: Palette (handled internally by PPU)
+    wire chr_select = ~ppu_vram_addr[13];
 
-    wire chr_select = ~ppu_vram_addr[13]; // addr < $2000
-
-    // CHR ROM (8KB)
     wire [7:0] chr_data;
     chr_rom u_chr_rom (
         .clk  (clk_ppu),
@@ -100,9 +124,6 @@ module basys3_top (
         .data (chr_data)
     );
 
-    // Nametable VRAM (2KB) with vertical mirroring
-    // Vertical mirroring: $2000=$2800, $2400=$2C00
-    // Physical address: {addr[10], addr[9:0]}
     wire [10:0] nt_phys_addr = {ppu_vram_addr[10], ppu_vram_addr[9:0]};
     wire [7:0]  nt_data;
 
@@ -114,7 +135,6 @@ module basys3_top (
         .dout (nt_data)
     );
 
-    // Data mux: delay select by 1 cycle to match BRAM read latency
     reg chr_sel_d;
     always @(posedge clk_ppu)
         chr_sel_d <= chr_select;
@@ -124,7 +144,7 @@ module basys3_top (
     // =========================================================
     // Framebuffer (dual-port BRAM)
     // =========================================================
-    wire [5:0] fb_color;
+    wire [5:0]  fb_color;
     wire [15:0] fb_rd_addr;
 
     framebuffer u_framebuffer (
@@ -154,7 +174,7 @@ module basys3_top (
     );
 
     // =========================================================
-    // VGA scaler (640x480 -> 256x240 NES)
+    // VGA scaler
     // =========================================================
     wire in_nes_area;
 
@@ -167,7 +187,7 @@ module basys3_top (
     );
 
     // =========================================================
-    // NES palette LUT (6-bit NES color -> 12-bit RGB)
+    // NES palette LUT
     // =========================================================
     wire [3:0] pal_r, pal_g, pal_b;
 
