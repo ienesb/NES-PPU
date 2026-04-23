@@ -52,35 +52,104 @@ module basys3_top (
     assign rst_ppu = rst_ppu_shift[3];
 
     // =========================================================
-    // Fake CPU: writes PPUCTRL/PPUMASK each vblank from switches.
-    // Phase 7 hardware path for now; full 6502 is Phase 9.
+    // Fake CPU (Phase 8): hardcoded init sequence simulating $2000-$2007
+    // writes, then per-vblank refresh of PPUCTRL/PPUMASK from switches.
+    //
+    // Init:
+    //   - OAMADDR=0 then 8 sprites * 4 bytes via OAMDATA
+    //   - PPUCTRL (NMI enable + pattern-table selects from switches)
+    //   - PPUMASK (show bg + sprites incl. left columns)
+    // After init, same vblank loop as Phase 7 so switches stay live.
+    // Full 6502 is Phase 9.
     // =========================================================
-    wire [7:0] ppuctrl_val = {3'b000, sw[3], sw[0], 3'b000};
-    //                        V P H   S(3)   B(4)   I NN
-    wire [7:0] ppumask_val = {3'b000, ~sw[2], ~sw[1], 3'b000};
-    //                                showS   showBG
+    //                        V P H  S(3)   B(4)  I NN
+    wire [7:0] ppuctrl_val = {1'b1, 2'b00, sw[3], sw[0], 3'b000}; // NMI enable
+    //                                showS   showBG  leftS leftBG greyscale
+    wire [7:0] ppumask_val = {3'b000, ~sw[2], ~sw[1], 2'b11, 1'b0};
 
     wire vblank_flag_ppu;
 
     reg       cpu_we_r;
     reg [2:0] cpu_addr_r;
     reg [7:0] cpu_din_r;
+    reg [5:0] init_step;
+    reg       init_done;
     reg [1:0] wr_phase;
     reg       vblank_d;
     wire      vblank_rise = vblank_flag_ppu & ~vblank_d;
 
+    // OAM init lookup: 8 sprites = 32 bytes. ROM indexed by init_step-1.
+    // Layout per sprite: {Y, tile, attr, X}
+    // Tiles from gen_rom.py: 128=BLOCK, 129=DOT, 130=ARROW, 131=HEART
+    reg [7:0] oam_init [0:31];
+    initial begin
+        // sprite 0: BLOCK, pal 0, (64, 80)
+        oam_init[ 0] = 8'd80;  oam_init[ 1] = 8'd128; oam_init[ 2] = 8'h00; oam_init[ 3] = 8'd64;
+        // sprite 1: DOT,   pal 1, (96, 80)
+        oam_init[ 4] = 8'd80;  oam_init[ 5] = 8'd129; oam_init[ 6] = 8'h01; oam_init[ 7] = 8'd96;
+        // sprite 2: ARROW, pal 2, (128, 80)
+        oam_init[ 8] = 8'd80;  oam_init[ 9] = 8'd130; oam_init[10] = 8'h02; oam_init[11] = 8'd128;
+        // sprite 3: HEART, pal 3, (160, 80)
+        oam_init[12] = 8'd80;  oam_init[13] = 8'd131; oam_init[14] = 8'h03; oam_init[15] = 8'd160;
+        // sprite 4: BLOCK flipped H, pal 3, (64, 160)
+        oam_init[16] = 8'd160; oam_init[17] = 8'd128; oam_init[18] = 8'h43; oam_init[19] = 8'd64;
+        // sprite 5: ARROW flipped V, pal 0, (96, 160)
+        oam_init[20] = 8'd160; oam_init[21] = 8'd130; oam_init[22] = 8'h80; oam_init[23] = 8'd96;
+        // sprite 6: HEART behind bg, pal 1, (128, 160)
+        oam_init[24] = 8'd160; oam_init[25] = 8'd131; oam_init[26] = 8'h21; oam_init[27] = 8'd128;
+        // sprite 7: DOT, pal 2, (160, 160)
+        oam_init[28] = 8'd160; oam_init[29] = 8'd129; oam_init[30] = 8'h02; oam_init[31] = 8'd160;
+    end
+
+    localparam [5:0] INIT_OAMADDR  = 6'd0;                     // write OAMADDR=0
+    localparam [5:0] INIT_OAM_LAST = 6'd32;                    // steps 1..32 fill OAM
+    localparam [5:0] INIT_PPUCTRL  = 6'd33;
+    localparam [5:0] INIT_PPUMASK  = 6'd34;
+    localparam [5:0] INIT_DONE     = 6'd35;
+
+    // OAM CPU writes are gated by ~render_line inside ppu_top, so the init
+    // sequence must run during vblank (scanlines 241-260). Hold init_step=0
+    // until the first vblank rising edge, then pulse through all 35 steps.
+    reg init_started;
+
     always @(posedge clk_ppu) begin
         if (rst_ppu) begin
-            cpu_we_r <= 0;
-            wr_phase <= 0;
-            vblank_d <= 0;
+            cpu_we_r     <= 1'b0;
+            cpu_addr_r   <= 3'h0;
+            cpu_din_r    <= 8'h00;
+            init_step    <= 6'd0;
+            init_started <= 1'b0;
+            init_done    <= 1'b0;
+            wr_phase     <= 2'd0;
+            vblank_d     <= 1'b0;
         end else begin
             vblank_d <= vblank_flag_ppu;
-            cpu_we_r <= 0;
-            if (vblank_rise)
+            cpu_we_r <= 1'b0;
+
+            if (!init_done) begin
+                if (!init_started) begin
+                    if (vblank_rise) init_started <= 1'b1;
+                end else begin
+                    cpu_we_r <= 1'b1;
+                    if (init_step == INIT_OAMADDR) begin
+                        cpu_addr_r <= 3'h3; cpu_din_r <= 8'h00;
+                    end else if (init_step <= INIT_OAM_LAST) begin
+                        cpu_addr_r <= 3'h4;
+                        cpu_din_r  <= oam_init[init_step - 6'd1];
+                    end else if (init_step == INIT_PPUCTRL) begin
+                        cpu_addr_r <= 3'h0; cpu_din_r <= ppuctrl_val;
+                    end else if (init_step == INIT_PPUMASK) begin
+                        cpu_addr_r <= 3'h1; cpu_din_r <= ppumask_val;
+                    end
+
+                    if (init_step == INIT_DONE - 6'd1)
+                        init_done <= 1'b1;
+                    init_step <= init_step + 6'd1;
+                end
+            end else if (vblank_rise) begin
                 wr_phase <= 2'd1;
-            else if (wr_phase != 2'd0) begin
-                cpu_we_r <= 1;
+            end else if (wr_phase != 2'd0) begin
+                cpu_we_r <= 1'b1;
                 case (wr_phase)
                     2'd1: begin cpu_addr_r <= 3'h0; cpu_din_r <= ppuctrl_val; end
                     2'd2: begin cpu_addr_r <= 3'h1; cpu_din_r <= ppumask_val; end

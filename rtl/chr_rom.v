@@ -16,28 +16,7 @@ module chr_rom (
 
     reg [7:0] mem [0:8191];
 
-    integer i, j;
-    initial begin
-        // Clear all
-        for (i = 0; i < 8192; i = i + 1)
-            mem[i] = 8'h00;
-
-        // Pattern table 0 ($0000-$0FFF): 256 tiles
-        for (i = 0; i < 256; i = i + 1) begin
-            for (j = 0; j < 8; j = j + 1) begin
-                mem[i * 16 + j]     = i; // low plane
-                mem[i * 16 + j + 8] = 0; // high plane
-            end
-        end
-
-        // Pattern table 1 ($1000-$1FFF): inverted patterns
-        for (i = 0; i < 256; i = i + 1) begin
-            for (j = 0; j < 8; j = j + 1) begin
-                mem[4096 + i * 16 + j]     = ~i[7:0]; // low plane inverted
-                mem[4096 + i * 16 + j + 8] = 0;
-            end
-        end
-    end
+    initial $readmemh("chr.mem", mem);
 
     always @(posedge clk)
         data <= mem[addr];
