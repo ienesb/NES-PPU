@@ -206,9 +206,12 @@ module ppu_top (
         .sprite_overflow    (sprite_overflow)
     );
 
-    // VRAM bus arbitration: during render line the PPU pipeline owns the
-    // bus. In vblank/idle the CPU register file drives $2007 traffic.
-    wire ppu_bus_active = render_line;
+    // VRAM bus arbitration: during render lines AND with rendering enabled
+    // (either bg or sprites visible), the PPU pipeline owns the bus. With
+    // rendering disabled (PPUMASK bits 3/4 both 0) the CPU has free $2007
+    // access for the entire frame -- boot code that paints the nametable
+    // before enabling rendering relies on this.
+    wire ppu_bus_active = render_line & rendering_en;
     assign vram_addr = ppu_bus_active ? (sp_vram_fetch_active ? sp_vram_addr
                                                               : bg_vram_addr)
                                       : reg_bus_addr;

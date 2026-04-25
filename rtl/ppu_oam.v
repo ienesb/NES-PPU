@@ -25,21 +25,11 @@ module ppu_oam (
 
     integer k;
     initial begin
+        // All sprites off screen (Y=$FF). Real NES OAM is uninitialized at
+        // power-up, but $FF for every byte keeps every sprite hidden until
+        // the game writes valid OAM data via $2003/$2004 or $4014 DMA.
         for (k = 0; k < 256; k = k+1)
-            mem[k] = 8'hFF; // all sprites off screen
-
-        // Sprite 0: tile 1, screen Y=8-15, X=8, palette 0, in front, no flip
-        //   Y byte = screen_top - 1 = 7
-        mem[0] = 8'd7;   mem[1] = 8'd1;  mem[2] = 8'h00; mem[3] = 8'd8;
-
-        // Sprite 1: tile 2, screen Y=21-28, X=40, palette 1, H-flip, in front
-        mem[4] = 8'd20;  mem[5] = 8'd2;  mem[6] = 8'h41; mem[7] = 8'd40;
-
-        // Sprite 2: tile 3, screen Y=101-108, X=80, palette 2, behind BG
-        mem[8]  = 8'd100; mem[9]  = 8'd3; mem[10] = 8'h22; mem[11] = 8'd80;
-
-        // Sprite 3: tile 4, screen Y=51-58, X=120, palette 3, V-flip, in front
-        mem[12] = 8'd50;  mem[13] = 8'd4; mem[14] = 8'h83; mem[15] = 8'd120;
+            mem[k] = 8'hFF;
     end
 
     // Async reads (synthesizes to LUTRAM on Xilinx)
